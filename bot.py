@@ -2,7 +2,7 @@ import os
 from flask import Flask, request, jsonify
 from telebot import types
 import gspread
-from google.auth import service_account
+from google.oauth2 import service_account
 from dotenv import load_dotenv
 
 load_dotenv()
