@@ -1,0 +1,6 @@
+# Ignore credentials and env files
+.env
+conmaret-key.json
+*.json
+__pycache__/
+*.pyc
