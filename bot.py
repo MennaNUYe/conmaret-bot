@@ -1,4 +1,5 @@
 import os
+from flask import Flask, request, jsonify
 from telebot import types
 import gspread
 from google.auth import service_account
@@ -6,10 +7,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+app = Flask(__name__)
+
 # --- 1. Google Sheets Setup ---
 SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
-# Handle both local (file) and Render (env var) deployment
 google_creds_env = os.getenv("GOOGLE_CREDS")
 if google_creds_env:
     import json
@@ -24,41 +26,35 @@ client = gspread.authorize(creds)
 sheet = client.open("Conmaret Price List").sheet1
 
 # --- 2. Telegram Bot Setup ---
-TOKEN = os.getenv("TELEGRAM_TOKEN")  # Get from @BotFather
-ADMIN_ID = int(os.getenv("ADMIN_ID"))  # Get from @userinfobot
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 import telebot
 bot = telebot.TeleBot(TOKEN)
 
 # Rebar weights (kg per meter)
 REBAR_WEIGHTS = {
-    "8mm": 4.74,
-    "10mm": 7.40,
-    "12mm": 10.66,
-    "14mm": 14.50,
-    "16mm": 18.94,
-    "20mm": 29.59
+    "8mm": 4.74, "10mm": 7.40, "12mm": 10.66,
+    "14mm": 14.50, "16mm": 18.94, "20mm": 29.59
 }
 
-# Store order info temporarily
 order_data = {}
 
 def get_live_prices():
-    """Fetch live prices from Google Sheet"""
     try:
         data = sheet.get_all_values()
         return {
-            "local_rebar": float(data[0][1]),  # Cell B1
-            "turk_rebar": float(data[1][1]),    # Cell B2
-            "dangote": data[2][1],              # Cell B3
-            "derba": data[3][1],                # Cell B4
-            "g28_roof": data[4][1]              # Cell B5
+            "local_rebar": float(data[0][1]),
+            "turk_rebar": float(data[1][1]),
+            "dangote": data[2][1],
+            "derba": data[3][1],
+            "g28_roof": data[4][1]
         }
     except Exception as e:
         print(f"Error reading sheet: {e}")
         return None
 
-# --- Start Command ---
+# --- Handlers ---
 @bot.message_handler(commands=['start'])
 def start(message):
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
@@ -74,7 +70,6 @@ def start(message):
     )
     bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
 
-# --- Show Prices ---
 @bot.message_handler(func=lambda message: message.text == '📊 የዛመድ ዋጋ ዝርዝር')
 def show_prices(message):
     prices = get_live_prices()
@@ -96,13 +91,22 @@ def show_prices(message):
     )
     bot.send_message(message.chat.id, text, parse_mode='Markdown')
 
-# --- Rebar Calculator ---
 @bot.message_handler(func=lambda message: message.text == '🧮 ብረት ዋጋ አስላ')
 def choose_size(message):
     markup = types.InlineKeyboardMarkup()
     for size in REBAR_WEIGHTS.keys():
         markup.add(types.InlineKeyboardButton(size, callback_data=f"calc_{size}"))
     bot.send_message(message.chat.id, "እባክዎ የብረቱን ውፍረት (Size) ይምረጡ፦", reply_markup=markup)
+
+@bot.message_handler(func=lambda message: message.text == '📞 ያግኙን')
+def contact_us(message):
+    contact_text = (
+        "📍 **ኮንማረት (Conmaret)**\n"
+        "አድራሻ፦ መርካቶ | ተክለኃይማኖት | ዊንጌት\n"
+        "📞 ስልክ፦ [የእርስዎ ስልክ]\n"
+        "🌐 ድረ-ገጽ፦ Conmaret.com"
+    )
+    bot.send_message(message.chat.id, contact_text, parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('calc_'))
 def ask_qty(call):
@@ -126,7 +130,6 @@ def perform_calculation(message, size):
             f"🇹🇷 የቱርክ ብረት: **{cost_turk:,} ብር**"
         )
         
-        # Store order info for later
         order_data[message.chat.id] = result_text
         
         markup = types.InlineKeyboardMarkup()
@@ -135,7 +138,6 @@ def perform_calculation(message, size):
     except:
         bot.send_message(message.chat.id, "❌ ስህተት! እባክዎ ብዛቱን በቁጥር ብቻ ያስገቡ።")
 
-# --- Place Order ---
 @bot.callback_query_handler(func=lambda call: call.data == "place_order")
 def get_order(call):
     msg = bot.send_message(call.message.chat.id, "ትዕዛዝዎን ለመመዝገብ እባክዎ **የስልክ ቁጥርዎን** ያስገቡ፦")
@@ -155,16 +157,16 @@ def notify_admin(message):
     bot.send_message(ADMIN_ID, admin_msg, parse_mode='Markdown')
     bot.send_message(message.chat.id, "✅ ትዕዛዝዎ ደርሶናል። በቅርቡ በስልክ እንገናኛለን። እናመሰግናለን!")
 
-# --- Contact Us ---
-@bot.message_handler(func=lambda message: message.text == '📞 ያግኙን')
-def contact_us(message):
-    contact_text = (
-        "📍 **ኮንማረት (Conmaret)**\n"
-        "አድራሻ፦ መርካቶ | ተክለኃይማኖት | ዊንጌት\n"
-        "📞 ስልክ፦ [የእርስዎ ስልክ]\n"
-        "🌐 ድረ-ገጽ፦ Conmaret.com"
-    )
-    bot.send_message(message.chat.id, contact_text, parse_mode='Markdown')
+# --- Webhook endpoint ---
+@app.route(f"/{TOKEN}", methods=['POST'])
+def webhook():
+    json_update = request.get_json()
+    bot.process_new_updates([telebot.types.Update.de_json(json_update)])
+    return jsonify({"ok": True})
+
+@app.route("/")
+def index():
+    return "Conmaret Bot is running!"
 
 if __name__ == "__main__":
-    bot.polling(none_stop=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
